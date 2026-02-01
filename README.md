@@ -102,11 +102,3 @@ cd frontend
 npm run dev
 ```
 
-## Roadmap
-
-1. **Phase 1 – Data foundation**: source adapters, dedupe, Postgres storage (in progress).
-2. **Phase 2 – Vector + LLM eval**: embeddings via FAISS/pgvector, local Llama scoring, schema validation.
-3. **Phase 3 – Persona workflows**: GENAI_NEWS and PRODUCT_IDEAS clustering/summarization pipelines.
-4. **Phase 4 – Delivery & scheduling**: HTML email + Telegram delivery, cron/systemd automation, observability.
-
-Progress is incremental—please keep the scope limited to one phase at a time.
