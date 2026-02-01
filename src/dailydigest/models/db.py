@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -67,3 +68,17 @@ class Digest(Base):
     content_json: Mapped[dict[str, Any]] = mapped_column("content", JSON, nullable=False)
     total_articles: Mapped[int] = mapped_column(Integer, nullable=False)
     total_clusters: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class Subscription(Base):
+    """Subscription model for storing user subscriptions."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    categories: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    frequency: Mapped[str] = mapped_column(String, nullable=False, default="daily")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    is_active: Mapped[str] = mapped_column(String, default="true")

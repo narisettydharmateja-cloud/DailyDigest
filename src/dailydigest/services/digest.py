@@ -49,6 +49,21 @@ Write a welcoming intro that sets the tone and previews the key themes. Be conci
 
 Respond ONLY with the intro text (no JSON, no extra formatting)."""
 
+ARTICLE_SUMMARY_PROMPT = """You are summarizing a single news article for a daily digest.
+
+Title:
+{title}
+
+Source text:
+{source_text}
+
+Instructions:
+- Write 2-3 sentences summarizing the article
+- Be concise and factual
+- Do not include links or markdown
+
+Respond ONLY with the summary text (no JSON, no extra formatting)."""
+
 
 def format_articles_for_llm(articles: List[Dict[str, Any]]) -> str:
     """Format article list for LLM prompt."""
@@ -110,6 +125,38 @@ def summarize_cluster(
     except Exception as exc:
         log.error("summarization_failed", error=str(exc), persona=persona)
         return f"Summary of {len(articles)} articles about {articles[0].get('title', 'tech news')[:50]}..."
+
+
+def summarize_article(
+    title: str,
+    source_text: str,
+    model_name: str = DEFAULT_MODEL,
+) -> str:
+    """Generate a concise summary for a single article."""
+    title = (title or "").strip()
+    source_text = (source_text or "").strip()
+
+    if not title and not source_text:
+        return ""
+
+    prompt = ARTICLE_SUMMARY_PROMPT.format(
+        title=title or "Untitled",
+        source_text=source_text[:1200],
+    )
+
+    try:
+        response = ollama.chat(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.4, "num_predict": 180},
+        )
+
+        summary = response["message"]["content"].strip()
+        log.info("article_summarized", length=len(summary))
+        return summary
+    except Exception as exc:
+        log.error("article_summary_failed", error=str(exc))
+        return (source_text or title)[:300]
 
 
 def generate_digest_intro(
@@ -202,21 +249,31 @@ def generate_persona_digest(
         theme = rep_article.get("title", "Tech News")[:80]
         theme_titles.append(theme)
         
+        article_items = []
+        for article in articles:
+            source_text = article.get("summary", "") or article.get("content", "") or ""
+            llm_summary = article.get("llm_summary") or summarize_article(
+                article.get("title", ""),
+                source_text,
+                model_name,
+            )
+
+            article_items.append({
+                "title": article.get("title", ""),
+                "summary": source_text,
+                "llm_summary": llm_summary,
+                "url": article.get("url", ""),
+                "source": article.get("source", ""),
+                "published_at": article.get("published_at"),
+            })
+
         sections.append({
             "cluster_id": cluster_id,
             "theme": theme,
             "summary": summary,
             "avg_score": avg_score,
             "article_count": len(articles),
-            "articles": [
-                {
-                    "title": a.get("title", ""),
-                    "url": a.get("url", ""),
-                    "source": a.get("source", ""),
-                    "published_at": a.get("published_at"),
-                }
-                for a in articles
-            ],
+            "articles": article_items,
         })
     
     # Generate intro

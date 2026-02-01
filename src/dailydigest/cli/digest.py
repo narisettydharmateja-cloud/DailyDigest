@@ -77,7 +77,7 @@ def generate_digest(
             articles.append({
                 "id": str(article.id),
                 "title": article.title,
-                "summary": article.summary,
+                "summary": article.summary or article.content or "",
                 "url": article.url,
                 "source": article.source,
                 "published_at": article.published_at.isoformat() if article.published_at else None,
