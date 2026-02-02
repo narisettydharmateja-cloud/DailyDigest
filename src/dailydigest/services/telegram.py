@@ -3,6 +3,7 @@
 import asyncio
 import html as html_lib
 import re
+from urllib.parse import urlparse
 from typing import Optional
 
 import structlog
@@ -21,6 +22,17 @@ def _strip_html(text: str) -> str:
     text = html_lib.unescape(text or "")
     text = re.sub(r"<[^>]+>", "", text)
     return " ".join(text.split())
+
+
+def _normalize_url(url: str | None) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme:
+        return url
+    if url.startswith("//"):
+        return f"https:{url}"
+    return f"https://{url}"
 
 
 def format_digest_telegram(digest: Digest) -> str:
@@ -46,7 +58,7 @@ def format_digest_telegram(digest: Digest) -> str:
         for article in section['articles']:
             # Escape special characters for Telegram Markdown V2
             title = article['title'].replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
-            message += f"• [{title}]({article['url']})\n"
+            message += f"• [{title}]({_normalize_url(article.get('url'))})\n"
         
         message += "\n---\n\n"
     
@@ -142,7 +154,7 @@ async def send_digest_telegram_async(digest_id: str, chat_id: str) -> None:
                 for article in section['articles']:
                     title = _strip_html(article.get('title', ''))
                     description = _strip_html(article.get('llm_summary', '')) or _strip_html(article.get('summary', ''))
-                    url = article.get('url', '')
+                    url = _normalize_url(article.get('url'))
 
                     article_message = f"{title}\n\n"
                     article_message += f"{description}\n\n"

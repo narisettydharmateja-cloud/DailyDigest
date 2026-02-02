@@ -1,27 +1,29 @@
-"""Hacker News adapter powered by the official Algolia API."""
+"""Hacker News adapter using the official RSS feed."""
 
 from __future__ import annotations
 
+import calendar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import structlog
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+import feedparser
 
 from dailydigest.models.ingestion import IngestedContent
 
-BASE_URL = "https://hn.algolia.com/api/v1/search_by_date"
+RSS_URL = "https://news.ycombinator.com/rss"
 USER_AGENT = "DailyDigestBot/0.1 (+https://local.run/dailydigest)"
 
 
 class HackerNewsAdapter:
-    """Fetch recent Hacker News stories via the Algolia search API."""
+    """Fetch recent Hacker News stories via the official RSS feed."""
 
     name = "hackernews"
 
     def __init__(self, query: str, timeout: float, max_items: int) -> None:
-        self.query = query
+        self.query = query.lower() if query else ""
         self.timeout = timeout
         self.max_items = max_items
         self.log = structlog.get_logger(__name__).bind(adapter=self.name)
@@ -34,58 +36,77 @@ class HackerNewsAdapter:
 
     def fetch_items(self, hours: int) -> list[IngestedContent]:
         since = datetime.now(tz=UTC) - timedelta(hours=hours)
-        hits_per_page = min(self.max_items, 100)
-        params = {
-            "query": self.query,
-            "tags": "story",
-            "hitsPerPage": hits_per_page,
-            "numericFilters": f"created_at_i>{int(since.timestamp())}",
-        }
-
-        response = self._perform_request(params)
-        payload = response.json()
-        hits = payload.get("hits", [])
+        
+        response_text = self._fetch_rss()
+        parsed = feedparser.parse(response_text)
+        
         items: list[IngestedContent] = []
-        for hit in hits[: self.max_items]:
+        for entry in parsed.entries:
+            if len(items) >= self.max_items:
+                break
+            
+            published = self._entry_datetime(entry)
+            if published and published < since:
+                continue
+            
             try:
-                items.append(self._map_hit(hit))
-            except Exception as exc:  # noqa: BLE001 - best effort ingestion
-                self.log.warning("adapter.item_failed", reason=str(exc), hit_id=hit.get("objectID"))
+                item = self._map_entry(entry)
+                # Filter by query keywords if provided
+                if self.query:
+                    title_lower = (item.title or "").lower()
+                    if not any(kw in title_lower for kw in self.query.replace('"', '').split(' or ')):
+                        continue
+                items.append(item)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("adapter.item_failed", reason=str(exc), entry_id=getattr(entry, "id", None))
+        
         self.log.info("adapter.completed", count=len(items))
         return items
 
-    def _perform_request(self, params: dict[str, Any]) -> httpx.Response:
+    def _fetch_rss(self) -> str:
         headers = {"User-Agent": USER_AGENT}
         for attempt in self._retryer:
             with attempt:
-                with httpx.Client(timeout=self.timeout, headers=headers) as client:
-                    response = client.get(BASE_URL, params=params)
+                with httpx.Client(timeout=self.timeout, headers=headers, verify=False, follow_redirects=True) as client:
+                    response = client.get(RSS_URL)
                     response.raise_for_status()
-                    return response
+                    return response.text
         raise RuntimeError("Retryer exhausted without raising")
 
-    def _map_hit(self, hit: dict[str, Any]) -> IngestedContent:
-        object_id = str(hit["objectID"])
-        url = hit.get("url") or f"https://news.ycombinator.com/item?id={object_id}"
-        title = hit.get("title") or hit.get("story_text") or "(untitled)"
-        summary = hit.get("story_text") or hit.get("title")
-        content = hit.get("story_text")
-        published_raw = hit.get("created_at")
+    def _entry_datetime(self, entry: Any) -> datetime | None:
+        struct_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+        if not struct_time:
+            return None
+        timestamp = calendar.timegm(struct_time)
+        return datetime.fromtimestamp(timestamp, tz=UTC)
+
+    def _map_entry(self, entry: Any) -> IngestedContent:
+        link = getattr(entry, "link", None)
+        if not link:
+            raise ValueError("Entry missing link")
+        
+        # Extract item ID from comments URL
+        comments_url = getattr(entry, "comments", "")
+        object_id = ""
+        if "item?id=" in comments_url:
+            object_id = comments_url.split("item?id=")[-1]
+        else:
+            object_id = link
+        
+        title = getattr(entry, "title", "(untitled)")
+        summary = getattr(entry, "description", None)
+        
         metadata = {
-            "author": hit.get("author"),
-            "points": hit.get("points"),
-            "num_comments": hit.get("num_comments"),
-            "tags": hit.get("_tags", []),
+            "comments_url": comments_url,
         }
 
         return IngestedContent(
             source=self.name,
-            external_id=object_id,
+            external_id=str(object_id),
             title=title,
             summary=summary,
-            content=content,
-            url=url,
-            published_at=published_raw,
-            engagement=hit.get("points"),
+            content=summary,
+            url=link,
+            published_at=self._entry_datetime(entry),
             metadata=metadata,
         )

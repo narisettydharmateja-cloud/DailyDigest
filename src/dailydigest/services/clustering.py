@@ -73,6 +73,11 @@ def cluster_articles(
         noise=n_noise,
     )
     
+    # If no clusters formed, treat each article as its own cluster
+    if n_clusters == 0 and valid_articles:
+        log.info("no_clusters_formed_using_individual_articles")
+        clusters = {i: [article] for i, article in enumerate(valid_articles)}
+    
     return clusters
 
 

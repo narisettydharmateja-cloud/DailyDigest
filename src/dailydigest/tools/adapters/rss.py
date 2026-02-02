@@ -66,7 +66,7 @@ class RSSAdapter:
         headers = {"User-Agent": USER_AGENT}
         for attempt in self._retryer:
             with attempt:
-                with httpx.Client(timeout=self.timeout, headers=headers, follow_redirects=True) as client:
+                with httpx.Client(timeout=self.timeout, headers=headers, follow_redirects=True, verify=False) as client:
                     response = client.get(url)
                     response.raise_for_status()
                     return response.text

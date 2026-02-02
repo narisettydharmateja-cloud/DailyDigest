@@ -7,7 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import structlog
@@ -20,6 +20,17 @@ logger = structlog.get_logger()
 config = get_config()
 
 _OG_IMAGE_CACHE: dict[str, Optional[str]] = {}
+
+
+def _normalize_url(url: str | None) -> Optional[str]:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme:
+        return url
+    if url.startswith("//"):
+        return f"https:{url}"
+    return f"https://{url}"
 
 
 def _extract_preview_image(url: str | None) -> Optional[str]:
@@ -74,7 +85,7 @@ def format_digest_topic_email(
     top_title = None
     if section.get("articles"):
         first_article = section["articles"][0]
-        top_url = first_article.get("url")
+        top_url = _normalize_url(first_article.get("url"))
         top_title = first_article.get("title")
 
     html = f"""
@@ -110,12 +121,12 @@ def format_digest_topic_email(
     if top_url:
         link_text = top_title or "Read source"
         if preview_image_url:
-            title_text = preview_title or link_text
             html += f"""
             <div class="preview">
-                <img class="preview-img" src="{preview_image_url}" alt="{title_text}">
+                <a href="{top_url}" target="_blank">
+                    <img class="preview-img" src="{preview_image_url}" alt="Article preview">
+                </a>
                 <div class="preview-body">
-                    <div class="preview-title">{title_text}</div>
                     <a href="{top_url}" target="_blank">Open article →</a>
                 </div>
             </div>
@@ -225,8 +236,8 @@ def send_email(
         raise
 
 
-def send_digest_email(digest_id: str, to_email: str) -> None:
-    """Send a digest via email (one topic per email, max one link)."""
+def send_digest_email(digest_id: str, to_email: str, max_topics: int = 5) -> None:
+    """Send a digest via email with all topics in one email (max 5 topics)."""
     engine = build_engine(config.database_url)
     session_factory = create_session_factory(engine)
     
@@ -237,35 +248,103 @@ def send_digest_email(digest_id: str, to_email: str) -> None:
             raise ValueError(f"Digest not found: {digest_id}")
         
         content = digest.content_json
-        for index, section in enumerate(content["sections"], 1):
-            preview_image_url = None
-            preview_title = None
-            if section.get("articles"):
-                preview_title = section["articles"][0].get("title")
-                preview_image_url = _extract_preview_image(section["articles"][0].get("url"))
+        sections = content["sections"][:max_topics]  # Limit to max_topics
+        
+        html_content = format_digest_email(digest, sections)
+        subject = (
+            f"{digest.persona.replace('_', ' ').title()} Digest - "
+            f"{len(sections)} Topics ({digest.generated_at.strftime('%b %d, %Y')})"
+        )
 
-            html_content = format_digest_topic_email(
-                digest,
-                section,
-                index,
-                preview_image_url=preview_image_url,
-                preview_title=preview_title,
-            )
-            subject = (
-                f"{digest.persona.replace('_', ' ').title()} - Topic {index}: "
-                f"{section['theme']} ({digest.generated_at.strftime('%b %d, %Y')})"
-            )
+        send_email(
+            to_email=to_email,
+            subject=subject,
+            html_content=html_content,
+        )
 
-            send_email(
-                to_email=to_email,
-                subject=subject,
-                html_content=html_content,
-            )
+        logger.info(
+            "digest_emailed",
+            digest_id=digest_id,
+            persona=digest.persona,
+            topics=len(sections),
+            to=to_email,
+        )
 
-            logger.info(
-                "digest_topic_emailed",
-                digest_id=digest_id,
-                persona=digest.persona,
-                topic=index,
-                to=to_email,
-            )
+
+def format_digest_email(digest: Digest, sections: list) -> str:
+    """Format a complete digest with multiple topics as HTML email."""
+    content = digest.content_json
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #111; max-width: 700px; margin: 0 auto; padding: 20px; }}
+            h1 {{ font-size: 28px; margin-bottom: 4px; }}
+            .date {{ color: #555; font-style: italic; margin-bottom: 20px; }}
+            h2 {{ font-size: 18px; margin: 24px 0 6px 0; color: #0b5fff; }}
+            .meta {{ color: #666; font-size: 13px; margin-bottom: 10px; }}
+            a {{ color: #0b5fff; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
+            .topic {{ border-bottom: 1px solid #e5e7eb; padding-bottom: 16px; margin-bottom: 16px; }}
+            .topic:last-child {{ border-bottom: none; }}
+            .preview {{ border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; margin-top: 12px; }}
+            .preview-img {{ width: 100%; height: auto; display: block; }}
+            .preview-body {{ padding: 12px; }}
+            .footer {{ color: #777; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; }}
+        </style>
+    </head>
+    <body>
+        <h1>{digest.persona.replace('_', ' ').title()} Digest</h1>
+        <div class="date">{digest.generated_at.strftime('%B %d, %Y')}</div>
+        <p>{content['intro']}</p>
+    """
+    
+    for index, section in enumerate(sections, 1):
+        top_url = None
+        top_title = None
+        preview_image_url = None
+        
+        if section.get("articles"):
+            first_article = section["articles"][0]
+            top_url = _normalize_url(first_article.get("url"))
+            top_title = first_article.get("title")
+            preview_image_url = _extract_preview_image(top_url)
+        
+        html += f"""
+        <div class="topic">
+            <h2>Topic {index}: {section['theme']}</h2>
+            <div class="meta">{section['article_count']} articles, avg score: {section['avg_score']:.2f}</div>
+            <p>{section['summary']}</p>
+        """
+        
+        if top_url:
+            link_text = top_title or "Read source"
+            if preview_image_url:
+                html += f"""
+                <div class="preview">
+                    <a href="{top_url}" target="_blank">
+                        <img class="preview-img" src="{preview_image_url}" alt="Article preview">
+                    </a>
+                    <div class="preview-body">
+                        <a href="{top_url}" target="_blank">Open article →</a>
+                    </div>
+                </div>
+                """
+            else:
+                html += f"""<p><a href="{top_url}" target="_blank">{link_text}</a></p>"""
+        
+        html += "</div>"
+    
+    html += f"""
+        <div class="footer">
+            <p><strong>Total:</strong> {content['total_articles']} articles across {content['total_clusters']} topics</p>
+            <p><em>Powered by DailyDigest</em></p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
