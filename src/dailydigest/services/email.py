@@ -290,9 +290,7 @@ def format_digest_email(digest: Digest, sections: list) -> str:
             a:hover {{ text-decoration: underline; }}
             .topic {{ border-bottom: 1px solid #e5e7eb; padding-bottom: 16px; margin-bottom: 16px; }}
             .topic:last-child {{ border-bottom: none; }}
-            .preview {{ border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; margin-top: 12px; }}
-            .preview-img {{ width: 100%; height: auto; display: block; }}
-            .preview-body {{ padding: 12px; }}
+            .read-link {{ display: inline-block; margin-top: 8px; padding: 6px 12px; background: #0b5fff; color: #fff !important; border-radius: 4px; font-size: 13px; }}
             .footer {{ color: #777; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; }}
         </style>
     </head>
@@ -305,13 +303,11 @@ def format_digest_email(digest: Digest, sections: list) -> str:
     for index, section in enumerate(sections, 1):
         top_url = None
         top_title = None
-        preview_image_url = None
         
         if section.get("articles"):
             first_article = section["articles"][0]
             top_url = _normalize_url(first_article.get("url"))
             top_title = first_article.get("title")
-            preview_image_url = _extract_preview_image(top_url)
         
         html += f"""
         <div class="topic">
@@ -321,20 +317,8 @@ def format_digest_email(digest: Digest, sections: list) -> str:
         """
         
         if top_url:
-            link_text = top_title or "Read source"
-            if preview_image_url:
-                html += f"""
-                <div class="preview">
-                    <a href="{top_url}" target="_blank">
-                        <img class="preview-img" src="{preview_image_url}" alt="Article preview">
-                    </a>
-                    <div class="preview-body">
-                        <a href="{top_url}" target="_blank">Open article →</a>
-                    </div>
-                </div>
-                """
-            else:
-                html += f"""<p><a href="{top_url}" target="_blank">{link_text}</a></p>"""
+            link_text = top_title or "Read article"
+            html += f"""<a class="read-link" href="{top_url}" target="_blank">{link_text} →</a>"""
         
         html += "</div>"
     
