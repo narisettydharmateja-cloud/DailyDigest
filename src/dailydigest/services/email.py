@@ -135,6 +135,47 @@ def format_digest_topic_email(
     return html
 
 
+def format_welcome_email(categories: list[str], frequency: str) -> str:
+    """Format a welcome email for new subscribers."""
+    categories_text = ", ".join(categories) if categories else "your selected topics"
+    freq_text = (frequency or "daily").capitalize()
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #111; max-width: 700px; margin: 0 auto; padding: 20px; }}
+            h1 {{ font-size: 28px; margin-bottom: 8px; }}
+            .subtitle {{ color: #555; margin-bottom: 20px; }}
+            .box {{ border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; background: #fafafa; }}
+            .footer {{ color: #777; font-size: 12px; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <h1>Welcome to DailyDigest</h1>
+        <div class="subtitle">Your subscription is active.</div>
+        <div class="box">
+            <p><strong>Topics:</strong> {categories_text}</p>
+            <p><strong>Frequency:</strong> {freq_text}</p>
+        </div>
+        <p>Your first digest will arrive soon.</p>
+        <div class="footer">
+            <em>Powered by DailyDigest</em>
+        </div>
+    </body>
+    </html>
+    """
+
+
+def send_welcome_email(to_email: str, categories: list[str], frequency: str) -> None:
+    """Send a welcome email to a new subscriber."""
+    html_content = format_welcome_email(categories, frequency)
+    subject = "Welcome to DailyDigest"
+    send_email(to_email=to_email, subject=subject, html_content=html_content)
+
+
 def send_email(
     to_email: str,
     subject: str,

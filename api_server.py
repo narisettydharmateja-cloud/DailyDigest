@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import List
+from typing import Iterable, List
 
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import Column, DateTime, Integer, String, create_engine
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from dailydigest.config import get_config
 from dailydigest.models.db import Subscription, Base, Digest
 from dailydigest.services.database import build_engine
+from dailydigest.services.email import send_digest_email, send_welcome_email
 
 # Configure logging
 log = structlog.get_logger("api.subscription")
@@ -64,6 +65,37 @@ class SubscriptionResponse(BaseModel):
         from_attributes = True
 
 
+def _digest_persona_search(category: str) -> str:
+    if category == "genai":
+        return "%genai%"
+    if category == "product":
+        return "%product%"
+    return f"%{category}%"
+
+
+def _find_latest_digests(session: Session, categories: Iterable[str]) -> list[str]:
+    digest_ids: list[str] = []
+    for category in categories:
+        persona_search = _digest_persona_search(category)
+        digest = (
+            session.query(Digest)
+            .filter(Digest.persona.ilike(persona_search))
+            .order_by(Digest.generated_at.desc())
+            .first()
+        )
+        if digest:
+            digest_ids.append(str(digest.id))
+    return digest_ids
+
+
+def _send_latest_digests(to_email: str, digest_ids: Iterable[str]) -> None:
+    for digest_id in digest_ids:
+        try:
+            send_digest_email(digest_id=digest_id, to_email=to_email)
+        except Exception as exc:
+            log.warning("latest_digest_failed", email=to_email, digest_id=digest_id, error=str(exc))
+
+
 @app.get("/")
 def root():
     """Root endpoint."""
@@ -71,7 +103,7 @@ def root():
 
 
 @app.post("/api/subscribe", response_model=SubscriptionResponse)
-def create_subscription(subscription: SubscriptionCreate):
+def create_subscription(subscription: SubscriptionCreate, background_tasks: BackgroundTasks):
     """Create a new subscription."""
     
     db: Session = SessionLocal()
@@ -90,6 +122,17 @@ def create_subscription(subscription: SubscriptionCreate):
             db.refresh(existing)
             
             log.info("subscription_updated", email=subscription.email)
+            digest_ids = _find_latest_digests(db, subscription.categories)
+            background_tasks.add_task(
+                send_welcome_email,
+                to_email=subscription.email,
+                categories=subscription.categories,
+                frequency=subscription.frequency,
+            )
+            if digest_ids:
+                background_tasks.add_task(_send_latest_digests, subscription.email, digest_ids)
+            else:
+                log.info("no_latest_digests_found", email=subscription.email, categories=subscription.categories)
             return existing
         
         # Create new subscription
@@ -104,6 +147,18 @@ def create_subscription(subscription: SubscriptionCreate):
         db.refresh(db_subscription)
         
         log.info("subscription_created", email=subscription.email, categories=subscription.categories)
+
+        digest_ids = _find_latest_digests(db, subscription.categories)
+        background_tasks.add_task(
+            send_welcome_email,
+            to_email=subscription.email,
+            categories=subscription.categories,
+            frequency=subscription.frequency,
+        )
+        if digest_ids:
+            background_tasks.add_task(_send_latest_digests, subscription.email, digest_ids)
+        else:
+            log.info("no_latest_digests_found", email=subscription.email, categories=subscription.categories)
         
         return db_subscription
         
